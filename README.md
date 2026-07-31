@@ -96,10 +96,18 @@ termina com sucesso.
 
 Log simultâneo no terminal e em `processing.log`, formato
 `data | nível | mensagem`. Registra início e fim da execução, caminhos de
-entrada e saída, WARNING para dados inválidos, INFO para clubes ignorados
-por campeonato, progresso a cada 100 mil linhas e um resumo final com os
-contadores, incluindo a quantidade de bytes UTF-8 inválidos. Registros
-exportados não são logados individualmente.
+entrada e saída, WARNING para dados inválidos, progresso a cada 100 mil
+linhas e um resumo final com os contadores, incluindo clubes ignorados por
+campeonato e bytes UTF-8 inválidos. Clubes filtrados e registros exportados
+não são logados individualmente, mantendo o volume de log limitado em bases
+grandes.
+
+## Teste de carga
+
+Em um JSONL de 2 milhões de linhas (721 MiB), o processamento terminou em
+92,67 segundos, com pico de 18,2 MiB de memória. Foram exportados 1.799.980
+clubes e 1.799.980 jogadores, e o `processing.log` final ficou com 65 linhas
+(8 KiB).
 
 ## Testes
 
