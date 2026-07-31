@@ -282,11 +282,6 @@ def process(input_path: Path, output_dir: Path) -> tuple[int, int]:
                 championship = record.get("championship")
                 if not is_target_championship(championship):
                     stats["clubes_ignorados_campeonato"] += 1
-                    logger.info(
-                        "Clube ignorado por campeonato: %s (%s).",
-                        clean(record.get("club_id")) or "?",
-                        clean(championship) or "-",
-                    )
                     continue
 
                 club_id = clean(record.get("club_id"))

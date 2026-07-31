@@ -236,19 +236,24 @@ class ProcessingBehaviorTests(unittest.TestCase):
         self.assertEqual(clubs[0]["Cores"], "azul|branco|vermelho")
 
     def test_championship_filter(self):
-        _, _, clubs, players = process_records(
-            [
-                club(club_id="A", championship="SERIE A"),
-                club(club_id="B", championship="SERIE B"),
-                club(
-                    club_id="C",
-                    championship="SEM CAMPEONATO",
-                    players=[{"player_id": "C-1"}],
-                ),
-            ]
-        )
+        with self.assertLogs(main.logger, level="INFO") as captured:
+            _, _, clubs, players = process_records(
+                [
+                    club(club_id="A", championship="SERIE A"),
+                    club(club_id="B", championship="SERIE B"),
+                    club(
+                        club_id="C",
+                        championship="SEM CAMPEONATO",
+                        players=[{"player_id": "C-1"}],
+                    ),
+                ]
+            )
+
         self.assertEqual([c["Id do Clube"] for c in clubs], ["A", "B"])
         self.assertTrue(all(p["Id do Clube"] != "C" for p in players))
+        logs = "\n".join(captured.output)
+        self.assertNotIn("Clube ignorado por campeonato", logs)
+        self.assertIn("clubes_ignorados_campeonato=1", logs)
 
     def test_malformed_json_does_not_stop_file(self):
         _, _, clubs, _ = process_records(
