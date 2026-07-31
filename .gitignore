@@ -1,0 +1,19 @@
+# added by agent-md installer
+.agent/
+
+# Re-include project files that the global gitignore hides, so git (and
+# the state-enforcement/verify hooks) can see them in this repo.
+memory/
+agent-md.toml
+
+# Python
+__pycache__/
+*.pyc
+
+# Local tooling / generated output
+.rtk/
+out/
+2026-07-30-205404-estou-fazendo-um-desafio-tcnico-de-processamento.txt
+
+# Duplicata com nome de download; o canônico é sample_clubes.jsonl
+sample_clubes (3) (1).jsonl

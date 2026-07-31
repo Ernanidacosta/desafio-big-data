@@ -1,0 +1,7 @@
+line-length = 88
+
+[lint]
+# Conjunto explícito (pycodestyle + pyflakes) para o lint ser
+# determinístico entre versões do ruff. O isolamento por registro usa
+# `except Exception` de propósito, então BLE001 não é habilitado.
+select = ["E", "F"]
