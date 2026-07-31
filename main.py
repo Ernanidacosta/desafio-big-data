@@ -11,12 +11,15 @@ import argparse
 import csv
 import json
 import logging
+import re
 import unicodedata
 from datetime import date
 from pathlib import Path
-from typing import Any, Iterator, TextIO
+from tempfile import TemporaryDirectory
+from typing import Any, Iterator, NoReturn, TextIO
 
 LOG_FILENAME = "processing.log"
+DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
 
 VALID_CHAMPIONSHIPS = {"SERIE A", "SERIE B"}
 
@@ -61,6 +64,7 @@ STATS_TEMPLATE: dict[str, int] = {
     "colors_invalido": 0,
     "players_invalido": 0,
     "jogadores_invalidos": 0,
+    "bytes_utf8_invalidos": 0,
 }
 
 stats: dict[str, int] = dict(STATS_TEMPLATE)
@@ -75,12 +79,12 @@ def reset_stats() -> None:
 def setup_logging(output_dir: Path) -> None:
     """Configura logging em arquivo (output_dir) e console."""
     logger.setLevel(logging.INFO)
+    for handler in logger.handlers:
+        handler.close()
     logger.handlers.clear()
     fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
 
-    file_handler = logging.FileHandler(
-        output_dir / LOG_FILENAME, encoding="utf-8"
-    )
+    file_handler = logging.FileHandler(output_dir / LOG_FILENAME, encoding="utf-8")
     file_handler.setFormatter(fmt)
 
     console_handler = logging.StreamHandler()
@@ -103,6 +107,8 @@ def clean_date(value: Any) -> str:
     if not text:
         return ""
     try:
+        if DATE_PATTERN.fullmatch(text) is None:
+            raise ValueError
         date.fromisoformat(text)
     except ValueError:
         stats["data_invalida"] += 1
@@ -133,6 +139,10 @@ def is_target_championship(value: Any) -> bool:
     return normalize_championship(value) in VALID_CHAMPIONSHIPS
 
 
+def reject_json_constant(value: str) -> NoReturn:
+    raise ValueError(f"constante JSON inválida: {value}")
+
+
 def iter_records(fh: TextIO) -> Iterator[dict[str, Any]]:
     """Lê JSONL estrito: exatamente um objeto JSON por linha.
 
@@ -146,14 +156,27 @@ def iter_records(fh: TextIO) -> Iterator[dict[str, Any]]:
         if stats["linhas"] % PROGRESS_EVERY == 0:
             logger.info("Progresso: %d linhas processadas.", stats["linhas"])
 
+        invalid_utf8_bytes = sum(
+            0xDC80 <= ord(character) <= 0xDCFF for character in line
+        )
+        if invalid_utf8_bytes:
+            stats["bytes_utf8_invalidos"] += invalid_utf8_bytes
+            stats["registros_invalidos"] += 1
+            logger.warning(
+                "Linha %d ignorada: %d byte(s) UTF-8 inválido(s).",
+                stats["linhas"],
+                invalid_utf8_bytes,
+            )
+            continue
+
         text = line.strip()
         if not text:
             stats["linhas_vazias"] += 1
             continue
 
         try:
-            obj = json.loads(text)
-        except (json.JSONDecodeError, RecursionError) as exc:
+            obj = json.loads(text, parse_constant=reject_json_constant)
+        except (ValueError, RecursionError) as exc:
             stats["json_invalido"] += 1
             logger.warning("JSON inválido na linha %d: %s", stats["linhas"], exc)
             continue
@@ -199,6 +222,15 @@ def build_player_row(club_id: str, player: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def is_utf8_encodable(row: dict[str, str]) -> bool:
+    try:
+        for value in row.values():
+            value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _iter_players(club_id: str, record: dict[str, Any]) -> Iterator[dict[str, Any]]:
     """Retorna a lista de jogadores; avisa se o campo for de tipo inválido."""
     raw = record.get("players")
@@ -226,17 +258,27 @@ def process(input_path: Path, output_dir: Path) -> tuple[int, int]:
     clubs_path = output_dir / "clubs.csv"
     players_path = output_dir / "players.csv"
 
-    with input_path.open(encoding="utf-8-sig", errors="replace") as fh, \
-            clubs_path.open("w", newline="", encoding="utf-8") as clubs_fh, \
-            players_path.open("w", newline="", encoding="utf-8") as players_fh:
+    with TemporaryDirectory(
+        dir=output_dir,
+        prefix=".processing-",
+    ) as temporary_dir:
+        temporary_path = Path(temporary_dir)
+        temporary_clubs_path = temporary_path / clubs_path.name
+        temporary_players_path = temporary_path / players_path.name
 
-        club_writer = csv.DictWriter(clubs_fh, fieldnames=CLUB_HEADER)
-        player_writer = csv.DictWriter(players_fh, fieldnames=PLAYER_HEADER)
-        club_writer.writeheader()
-        player_writer.writeheader()
+        with (
+            input_path.open(encoding="utf-8-sig", errors="surrogateescape") as fh,
+            temporary_clubs_path.open("w", newline="", encoding="utf-8") as clubs_fh,
+            temporary_players_path.open(
+                "w", newline="", encoding="utf-8"
+            ) as players_fh,
+        ):
+            club_writer = csv.DictWriter(clubs_fh, fieldnames=CLUB_HEADER)
+            player_writer = csv.DictWriter(players_fh, fieldnames=PLAYER_HEADER)
+            club_writer.writeheader()
+            player_writer.writeheader()
 
-        for record in iter_records(fh):
-            try:
+            for record in iter_records(fh):
                 championship = record.get("championship")
                 if not is_target_championship(championship):
                     stats["clubes_ignorados_campeonato"] += 1
@@ -248,29 +290,41 @@ def process(input_path: Path, output_dir: Path) -> tuple[int, int]:
                     continue
 
                 club_id = clean(record.get("club_id"))
-                club_writer.writerow(build_club_row(record))
+                club_row = build_club_row(record)
+                if not is_utf8_encodable(club_row):
+                    stats["registros_invalidos"] += 1
+                    logger.warning(
+                        "Clube %s ignorado: valor Unicode inválido.",
+                        club_id or "?",
+                    )
+                    continue
+                club_writer.writerow(club_row)
                 stats["clubes_exportados"] += 1
 
                 for player in _iter_players(club_id, record):
-                    try:
-                        if not isinstance(player, dict):
-                            raise TypeError(
-                                f"tipo inesperado ({type(player).__name__})"
-                            )
-                        player_writer.writerow(
-                            build_player_row(club_id, player)
-                        )
-                        stats["jogadores_exportados"] += 1
-                    except Exception as exc:
+                    if not isinstance(player, dict):
                         stats["jogadores_invalidos"] += 1
                         logger.warning(
-                            "Jogador inválido ignorado (clube %s): %s",
+                            "Jogador inválido ignorado (clube %s): "
+                            "tipo inesperado (%s)",
                             club_id or "?",
-                            exc,
+                            type(player).__name__,
                         )
-            except Exception as exc:
-                stats["registros_invalidos"] += 1
-                logger.warning("Registro %d ignorado: %s", stats["linhas"], exc)
+                        continue
+                    player_row = build_player_row(club_id, player)
+                    if not is_utf8_encodable(player_row):
+                        stats["jogadores_invalidos"] += 1
+                        logger.warning(
+                            "Jogador inválido ignorado (clube %s): "
+                            "valor Unicode inválido.",
+                            club_id or "?",
+                        )
+                        continue
+                    player_writer.writerow(player_row)
+                    stats["jogadores_exportados"] += 1
+
+        temporary_clubs_path.replace(clubs_path)
+        temporary_players_path.replace(players_path)
 
     _log_summary()
     return stats["clubes_exportados"], stats["jogadores_exportados"]
@@ -280,9 +334,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Processa um JSONL de clubes em clubs.csv e players.csv."
     )
-    parser.add_argument(
-        "input", type=Path, help="Caminho do arquivo JSONL de entrada."
-    )
+    parser.add_argument("input", type=Path, help="Caminho do arquivo JSONL de entrada.")
     parser.add_argument(
         "--output-dir",
         type=Path,
