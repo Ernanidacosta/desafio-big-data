@@ -9,11 +9,13 @@ agent-md.toml
 # Python
 __pycache__/
 *.pyc
+.venv/
 
 # Local tooling / generated output
 .rtk/
 out/
 2026-07-30-205404-estou-fazendo-um-desafio-tcnico-de-processamento.txt
+2026-07-30-desafio-tcnico-de-processamento.txt
 
 # Duplicata com nome de download; o canônico é sample_clubes.jsonl
 sample_clubes (3) (1).jsonl
