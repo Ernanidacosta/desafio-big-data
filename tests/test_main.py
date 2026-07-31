@@ -173,18 +173,38 @@ class ProcessingBehaviorTests(unittest.TestCase):
         self.assertEqual(players[0]["Data de Estreia"], "")
 
     def test_reconfiguring_logging_closes_replaced_handlers(self):
-        with TemporaryDirectory() as tmp:
-            output_dir = Path(tmp)
-            main.setup_logging(output_dir)
-            replaced_handlers = tuple(main.logger.handlers)
+        file_handlers = [Mock(spec=main.logging.Handler) for _ in range(2)]
+        console_handlers = [Mock(spec=main.logging.Handler) for _ in range(2)]
 
-            try:
-                main.setup_logging(output_dir)
-                self.assertTrue(all(handler._closed for handler in replaced_handlers))
-            finally:
-                for handler in main.logger.handlers:
-                    handler.close()
-                main.logger.handlers.clear()
+        for handler in main.logger.handlers:
+            handler.close()
+        main.logger.handlers.clear()
+
+        with (
+            patch.object(
+                main.logging,
+                "FileHandler",
+                side_effect=file_handlers,
+            ),
+            patch.object(
+                main.logging,
+                "StreamHandler",
+                side_effect=console_handlers,
+            ),
+        ):
+            main.setup_logging(Path("."))
+            main.setup_logging(Path("."))
+
+        file_handlers[0].close.assert_called_once_with()
+        console_handlers[0].close.assert_called_once_with()
+        self.assertEqual(
+            main.logger.handlers,
+            [file_handlers[1], console_handlers[1]],
+        )
+
+        for handler in main.logger.handlers:
+            handler.close()
+        main.logger.handlers.clear()
 
     def test_none_becomes_empty_and_zero_preserved(self):
         _, _, clubs, players = process_records(
